@@ -23,6 +23,9 @@ tankDrive tank();
 intake intake();
 indexer indexer();
 
+float targetX, targetY, targetAZ;
+bool targeting;
+
 FILE *fp = fopen("/dev/serial2","wb");
 
 void pre_auton(void) {
@@ -39,17 +42,24 @@ void run(void) {
   // User control code here, inside the loop
   static MAP_RECORD local_map;
   thread t1(dashboardTask);
-
+  targeting = false;
+  targetX = 0; targetY = 0; targetAZ = 0;
+  
   while (1) {
 
     jetson_comms.get_data( &local_map );
     fprintf(fp, "%.2f %.2f %.2f\n", local_map.pos.x, local_map.pos.y, local_map.pos.az  );
-    for (MAP_OBJECTS each : local_map.mapobj)
-    {
-      
+
+    for(MAP_OBJECTS each: local_map.mapobj){
+      fprintf(fp, "%ld %ld %.2f %.2f %.2f", each.age, each.classID, each.p[0], each.p[1], each.p[2]);
     }
+
     // request new data        
     jetson_comms.request_map();
+
+    if(targeting){
+      // Go from current position & heading to target position & heading
+    }
 
     this_thread::sleep_for(20);
   }
