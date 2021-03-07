@@ -2,6 +2,7 @@
 #include "vex.h"
 
 using namespace vex;
+using namespace std;
 
 class tankDrive{
 public:
@@ -9,16 +10,22 @@ public:
   motor Motor_Left_2;
   motor Motor_Right_1;
   motor Motor_Right_2;
-  double TURNING_BUFFER;
+  double turn_kP;
+  double move_kP;
 
   tankDrive();
+
   void move_left_side(double);
   void move_right_side(double);
-  void move_forward(double);
+
   // Turning is in units of degrees
   void left_turn(double);
   void right_turn(double);
 
-  void turn_to(double, double);
-  void move_to(double, double, double, double, double, double);
+  double turn_speed(double, double);
+  double move_speed(double, double);
+  bool move(double, double, double, double);
+
+  tuple<pair<double, double>, double> closestJoinHighway(double, double);
+  tuple<pair<double, double>, double> closestLeaveHighway(double, double);
 };
