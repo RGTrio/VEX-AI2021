@@ -207,9 +207,21 @@ void play(void) {
 
         break;
       } case 3: { // intake ball
+        intake.run_intake(50);
+        tank.move_left_side(50);
+        tank.move_right_side(50);
+
+        this_thread::sleep_for(2000);
+
+        intake.run_intake(50);
+        tank.move_left_side(50);
+        tank.move_right_side(50);
+        
+        this_thread::sleep_for(2000);
 
         break;
       } case 4: { // find goal
+        
         // set targetX, targetY, targetAZ
         // when successful, increment phase
       } case 5: { // drive to goal
@@ -225,6 +237,27 @@ void play(void) {
 
         break;
       } case 6: { // deposit ball
+        tank.move_left_side(50);
+        tank.move_right_side(50);
+
+        this_thread::sleep_for(1000);
+
+        tank.move_left_side(0);
+        tank.move_right_side(0);
+        intake.run_intake(50);
+        indexer.index(50);
+
+        this_thread::sleep_for(500);
+
+        intake.run_intake(0);
+        indexer.index(0);
+        tank.move_left_side(-50);
+        tank.move_right_side(-50);
+
+        this_thread::sleep_for(1000);
+
+        tank.move_left_side(0);
+        tank.move_right_side(0);
         break;
       }
     }
