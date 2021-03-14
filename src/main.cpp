@@ -10,30 +10,35 @@ using namespace std;
 
 #define DISTANCE_BUFFER 1.0
 #define ANGLE_BUFFER 5.0
+#define STOP_BEFORE 12.0 // 
 
 // A global instance of competition
 competition Competition;
 
 // AI Jetson Nano
 ai::jetson  jetson_comms;
+#define  MANAGER_ROBOT    1
 
-// Manager robot
-message_link linkA(VEX_LINK, "VRC_2585VEGA_A", linkType::manager);
-
-// Worker robot
-// message_link linkA(VEX_LINK, "VRC_2585VEGA_A", linkType::worker);
+#if defined(MANAGER_ROBOT)
+#pragma message("building for the manager")
+ai::robot_link       link( PORT11, "robot_32456_1", linkType::manager );
+#else
+#pragma message("building for the worker")
+ai::robot_link       link( PORT11, "robot_32456_1", linkType::worker );
+#endif
 
 // define your global instances of motors and other devices here
 static tankDrive tank;
 static intake intake;
 static indexer indexer;
 
-float targetX, targetY, targetAZ;
-bool targeting;
+float targetX = 0.0, targetY = 0.0;
 int phase = 1;
 int drivePhase = 1;
 int highwaySeg = -1;
-
+int curGoal = 0;
+int32_t loop_time = 66;
+static MAP_RECORD local_map;
 
 FILE *fp = fopen("/dev/serial2","wb");
 
@@ -47,7 +52,7 @@ void pre_auton(void) {
   return;
 }
 
-bool drive(MAP_RECORD local_map, tuple<pair<double, double>, double> res, int targetAZ){
+bool drive(MAP_RECORD local_map, tuple<pair<double, double>, double> res){
   switch(drivePhase) {
     case 1: { // Turn to target heading
       if(tank.move(0, 0, local_map.pos.az, get<1>(res))){
@@ -153,17 +158,11 @@ bool drive(MAP_RECORD local_map, tuple<pair<double, double>, double> res, int ta
     } case 7: { // Drive straight to destination
       int changeX = max(get<0>(res).first, (double)local_map.pos.x) - min(get<0>(res).first, (double)local_map.pos.x);
       int changeY = max(get<0>(res).second, (double)local_map.pos.y) - min(get<0>(res).second, (double)local_map.pos.y);
-      // to-do: replace target location
-      if(tank.move(0, sqrt(changeX * changeX + changeY * changeY), local_map.pos.az, get<1>(res))){
+      if(tank.move(0, sqrt(changeX * changeX + changeY * changeY) - STOP_BEFORE, local_map.pos.az, get<1>(res))){
         drivePhase++;
       }
       break;
-    } case 8: { // Turn to target heading
-      if(tank.move(0, 0, local_map.pos.az, targetAZ)){
-        drivePhase++;
-      }
-      break;
-    } case 9: {
+    } case 8: {
       return true;
       break;
     }
@@ -174,26 +173,48 @@ bool drive(MAP_RECORD local_map, tuple<pair<double, double>, double> res, int ta
 
 
 void play(void) {
-  static MAP_RECORD local_map;
   tuple<pair<double, double>, double> res = tuple<pair<double, double>, double> {pair<double,double>{0.0, 0.0}, 0.0};
 
   while(1){
     jetson_comms.get_data( &local_map );
-    fprintf(fp, "%.2f %.2f %.2f\n", local_map.pos.x, local_map.pos.y, local_map.pos.az  );
+    fprintf(fp, "%.2f %.2f %.2f\n", local_map.pos.x, local_map.pos.y, local_map.pos.az);
 
     for(MAP_OBJECTS each: local_map.mapobj){
-      fprintf(fp, "%ld %ld %.2f %.2f %.2f", each.age, each.classID, each.p[0], each.p[1], each.p[2]);
+      fprintf(fp, "%ld %ld %.2f %.2f %.2f", each.age, each.classID, each.positionX, each.positionY, each.positionZ);
     }
 
     // request new data        
     jetson_comms.request_map();
-    float targetX; float targetY; float targetAZ;
     
     switch(phase){
       case 1: { // find ball
-        // set targetX, targetY, targetAZ
-        // when successful, increment phase
-        // NO WHILE LOOPS ALLOWED
+        int camRange = 60;
+        float bestX;
+        float bestY;
+        float roboX = local_map.pos.x;
+        float roboY = local_map.pos.y;
+        float bestDist = 100;
+        for (int i = 0; i<360/camRange; i++){
+          jetson_comms.get_data( &local_map);
+
+          for(MAP_OBJECTS each: local_map.mapobj){
+            float dist = sqrt(pow((roboX-each.positionX),2) + pow((roboY-each.positionY),2));
+            // Find X and Y coordinates that give smallest distance
+            if (dist < bestDist){
+              bestX = each.positionX;
+              bestY = each.positionY;
+              bestDist = dist;
+            }
+          }
+          // Rotate 60 degrees to the next reference frame
+          float targetAZ = local_map.pos.az + camRange;
+          while(!tank.move(0, 0, local_map.pos.az, targetAZ)){}
+
+          jetson_comms.request_map();
+        }
+        targetX = bestX;
+        targetY = bestY;
+        phase++;
         break;
       } case 2: { // drive to ball
         if(drivePhase == 1 || drivePhase == 2)
@@ -201,7 +222,7 @@ void play(void) {
         else if (drivePhase == 4 || drivePhase == 6 || drivePhase == 7)
           res = tank.closestLeaveHighway(targetX, targetY); // target location
         
-        if(drive(local_map, res, targetAZ)){
+        if(drive(local_map, res)){
           drivePhase = 1; phase++;
         }
 
@@ -213,17 +234,35 @@ void play(void) {
 
         this_thread::sleep_for(2000);
 
-        intake.run_intake(50);
-        tank.move_left_side(50);
-        tank.move_right_side(50);
+        intake.run_intake(0);
+        tank.move_left_side(-50);
+        tank.move_right_side(-50);
         
         this_thread::sleep_for(2000);
 
+        tank.move_left_side(0);
+        tank.move_right_side(0);
+        phase++;
         break;
       } case 4: { // find goal
-        
-        // set targetX, targetY, targetAZ
+        // set targetX, targetY
         // when successful, increment phase
+        if(curGoal == 0){
+          targetX = -24; targetY = 24;
+        } else if (curGoal == 1){
+          targetX = -24; targetY = 0;
+        } else if (curGoal == 2){
+          targetX = -24; targetY = -24;
+        } else if (curGoal == 3){
+          targetX = 0; targetY = -24;
+        } else if (curGoal == 4){
+          targetX = 24; targetY = -24;
+        }
+
+        phase++;
+        curGoal++;
+        if(curGoal == 5)
+          curGoal = 0;
       } case 5: { // drive to goal
 
         if(drivePhase == 1 || drivePhase == 2)
@@ -231,7 +270,7 @@ void play(void) {
         else if (drivePhase == 4 || drivePhase == 6 || drivePhase == 7)
           res = tank.closestLeaveHighway(targetX, targetY); // target location
         
-        if(drive(local_map, res, targetAZ)){
+        if(drive(local_map, res)){
           drivePhase = 1; phase++;
         }
 
@@ -258,55 +297,94 @@ void play(void) {
 
         tank.move_left_side(0);
         tank.move_right_side(0);
+        phase = 1;
         break;
       }
     }
 
-    this_thread::sleep_for(20);
+    this_thread::sleep_for(loop_time);
   }
 }
 
-void run(void) {
-  // User control code here, inside the loop
-  thread t1(dashboardTask);
-  thread t2(play);
-}
-
-// Demo message sender in message_link
-int sendDemo() {
-  // wait for link
-  while( !linkA.isLinked() )
-    this_thread::sleep_for(50);
+// // Demo message sender in message_link
+// int sendDemo() {
+//   // wait for link
+//   while( !link.isLinked() )
+//     this_thread::sleep_for(50);
     
-  // check for connection
-  while(1) {
-    linkA.send("demoMessage");
-    this_thread::sleep_for(500);
-  }
-  return 0;
+//   // check for connection
+//   while(1) {
+//     link.send("demoMessage");
+//     this_thread::sleep_for(500);
+//   }
+//   return 0;
+// }
+
+// // Demo message receiver in message_link
+// void receiveDemo( const char *message, const char *linkname, double value ) {
+//   printf("%s: was received on '%s' link\n", message, linkname );
+// }
+
+void auto_Isolation(void) {
+  // TO-DO
 }
 
-// Demo message receiver in message_link
-void receiveDemo( const char *message, const char *linkname, double value ) {
-  printf("%s: was received on '%s' link\n", message, linkname );
+void auto_Interaction(void) {
+  play();
+}
+
+bool firstAutoFlag = true;
+
+void autonomousMain(void) {
+  // ..........................................................................
+  // The first time we enter this function we will launch our Isolation routine
+  // When the field goes disabled after the isolation period this task will die
+  // When the field goes enabled for the second time this task will start again
+  // and we will enter the interaction period. 
+  // ..........................................................................
+
+  if(firstAutoFlag)
+    auto_Isolation();
+  else 
+    auto_Interaction();
+
+  firstAutoFlag = false;
 }
 
 //
 // Main will set up the competition functions and callbacks.
 //
 int main() {
-  // Set up callbacks for autonomous and driver control periods.
-  // What are these called for AI???
-  Competition.autonomous(run);
-  Competition.drivercontrol(run);
-  linkA.received("demoMessage", receiveDemo);
+  thread t1(dashboardTask);
+  Competition.autonomous(autonomousMain);
+  // linkA.received("demoMessage", receiveDemo);
 
   // Run the pre-autonomous function.
   pre_auton();
 
   // Prevent main from exiting with an infinite loop.
-  while (true) {
+  // print through the controller to the terminal (vexos 1.0.12 is needed)
+    // As USB is tied up with Jetson communications we cannot use
+    // printf for debug.  If the controller is connected
+    // then this can be used as a direct connection to USB on the controller
+    // when using VEXcode.
+    //
+    //FILE *fp = fopen("/dev/serial2","wb");
 
-    this_thread::sleep_for(100);
-  }
+    while(1) {
+        // get last map data
+        jetson_comms.get_data( &local_map );
+
+        // set our location to be sent to partner robot
+        link.set_remote_location( local_map.pos.x, local_map.pos.y, local_map.pos.az );
+
+        //fprintf(fp, "%.2f %.2f %.2f\n", local_map.pos.x, local_map.pos.y, local_map.pos.az  );
+
+        // request new data    
+        // NOTE: This request should only happen in a single task.    
+        jetson_comms.request_map();
+
+        // Allow other tasks to run
+        this_thread::sleep_for(loop_time);
+    }
 }
